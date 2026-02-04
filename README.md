@@ -20,6 +20,7 @@ Provision Runpod Pods for GRPO fine-tuning with the Open R1 repo. This project:
 1. Create and activate a virtual environment.
 2. Install dependencies:
    - `pip install -r requirements.txt`
+3. Copy `example.env` to `.env` and fill in values.
 
 ## Environment variables
 - `RUNPOD_API_KEY` (required)
@@ -28,6 +29,16 @@ Provision Runpod Pods for GRPO fine-tuning with the Open R1 repo. This project:
 - `SSH_PUBLIC_KEY` or `RUNPOD_SSH_PUBLIC_KEY` (recommended)
 - `SSH_PRIVATE_KEY_PATH` (optional, defaults to `~/.ssh/id_ed25519`)
 - `WANDB_API_KEY` (optional if you pass `--report-to wandb`)
+
+## .env loading
+The runner loads `.env` automatically from the project directory.
+You can override the path with `--env-file`.
+`.env` values take precedence over user/system environment variables.
+
+## Hugging Face token
+Uploading to the Hub requires a **write** token. Read-only tokens will fail with 401.
+The runner uploads the token to the pod and writes it to `$HF_HOME/token` so
+training can authenticate reliably.
 
 ## SSH note
 The script waits for a public IP and a mapped port for `22/tcp`.
@@ -52,6 +63,29 @@ Use the custom image if you build and push it (see below):
 
 Enable Weights and Biases logging:
 - `python thinnka_runner.py --repo-id unsloth/gemma-2b --gpu-count 1 --report-to wandb`
+
+Debug remote shell commands:
+- `python thinnka_runner.py --repo-id unsloth/gemma-2b --gpu-count 1 --debug-remote`
+
+## Attention implementation
+By default the runner uses `sdpa` to avoid FlashAttention ABI issues on some images.
+If you want FlashAttention, pass:
+- `--attn-implementation flash_attention_2`
+
+When `flash_attention_2` is selected, the setup script installs `flash-attn`.
+
+## Accelerate config
+The runner generates an Accelerate config that matches your `--gpu-count`.
+You can switch ZeRO stage with:
+- `--deepspeed-stage 2` or `--deepspeed-stage 3`
+
+## GRPO generations
+`num_generations` must divide the effective batch size. The runner auto-adjusts
+if needed. Override with:
+- `--num-generations 4`
+
+## Failure cleanup
+If the run fails after a Pod is created, the script automatically stops and attempts to terminate the Pod to avoid extra charges.
 
 ## Custom image (Open R1 preinstalled)
 This repo includes a Dockerfile that builds `reeeon/thinnka:latest`.

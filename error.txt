@@ -1,0 +1,203 @@
+(venv) PS C:\Users\lyani\ClaudeProjects\thinkingConversion> python thinnka_runner.py --repo-id unsloth/gemma-2b --gpu-count 1 --env-file .env --debug-remote --deepspeed-stage 2
+Error: Remote command failed with exit status 1. Last output:
+shuffle_dataset=True,
+skip_memory_metrics=True,
+steps_per_generation=4,
+sync_ref_model=False,
+system_prompt=You are a helpful AI Assistant that provides well-reasoned and detailed responses. First reason inside <think> and </think>. Then provide the final answer directly after thinking.,
+temperature=0.7,
+tf32=None,
+top_k=None,
+top_p=1.0,
+torch_compile=False,
+torch_compile_backend=None,
+torch_compile_mode=None,
+torch_empty_cache_steps=None,
+torchdynamo=None,
+tpu_metrics_debug=False,
+tpu_num_cores=None,
+use_cpu=False,
+use_ipex=False,
+use_legacy_prediction_loop=False,
+use_liger_kernel=True,
+use_liger_loss=False,
+use_mps_device=False,
+use_vllm=True,
+vllm_gpu_memory_utilization=0.3,
+vllm_guided_decoding_regex=None,
+vllm_mode=colocate,
+vllm_server_base_url=None,
+vllm_server_host=0.0.0.0,
+vllm_server_port=8000,
+vllm_server_timeout=240.0,
+vllm_tensor_parallel_size=1,
+wandb_entity=None,
+wandb_log_unique_prompts=True,
+wandb_project=None,
+wandb_run_group=None,
+warmup_ratio=0.1,
+warmup_steps=0,
+weight_decay=0.0,
+)
+2026-02-04 21:12:58 - INFO - open_r1.utils.data - Loading dataset: open-r1/OpenR1-Math-220k
+README.md: 5.13kB [00:00, 23.2MB/s]
+Resolving data files: 100%|██████████████████| 20/20 [00:00<00:00, 40271.76it/s]
+Generating dataset open_r1-math-220k (/root/.cache/huggingface/datasets/open-r1___open_r1-math-220k/default/0.0.0/e4e141ec9dea9f8326f4d347be56105859b2bd68)
+2026-02-04 21:13:01 - INFO - datasets.builder - Generating dataset open_r1-math-220k (/root/.cache/huggingface/datasets/open-r1___open_r1-math-220k/default/0.0.0/e4e141ec9dea9f8326f4d347be56105859b2bd68)
+Downloading and preparing dataset open_r1-math-220k/default to /root/.cache/huggingface/datasets/open-r1___open_r1-math-220k/default/0.0.0/e4e141ec9dea9f8326f4d347be56105859b2bd68...
+2026-02-04 21:13:01 - INFO - datasets.builder - Downloading and preparing dataset open_r1-math-220k/default to /root/.cache/huggingface/datasets/open-r1___open_r1-math-220k/default/0.0.0/e4e141ec9dea9f8326f4d347be56105859b2bd68...      
+data/train-00000-of-00010.parquet: 100%|█████| 214M/214M [00:04<00:00, 52.1MB/s]
+data/train-00001-of-00010.parquet: 100%|██████| 215M/215M [00:01<00:00, 146MB/s]
+data/train-00002-of-00010.parquet: 100%|█████| 215M/215M [00:02<00:00, 78.2MB/s]
+data/train-00003-of-00010.parquet: 100%|██████| 217M/217M [00:01<00:00, 153MB/s]
+data/train-00004-of-00010.parquet: 100%|██████| 215M/215M [00:01<00:00, 153MB/s]
+data/train-00005-of-00010.parquet: 100%|██████| 214M/214M [00:01<00:00, 150MB/s]
+data/train-00006-of-00010.parquet: 100%|██████| 216M/216M [00:01<00:00, 154MB/s]
+data/train-00007-of-00010.parquet: 100%|██████| 216M/216M [00:01<00:00, 156MB/s]
+data/train-00008-of-00010.parquet: 100%|██████| 214M/214M [00:01<00:00, 152MB/s]
+data/train-00009-of-00010.parquet: 100%|█████| 215M/215M [00:03<00:00, 70.3MB/s]
+Downloading took 0.0 min
+2026-02-04 21:13:26 - INFO - datasets.download.download_manager - Downloading took 0.0 min
+Checksum Computation took 0.0 min
+2026-02-04 21:13:26 - INFO - datasets.download.download_manager - Checksum Computation took 0.0 min
+Generating train split
+2026-02-04 21:13:26 - INFO - datasets.builder - Generating train split
+Generating train split: 100%|███| 93733/93733 [00:06<00:00, 13502.01 examples/s]
+All the splits matched successfully.
+2026-02-04 21:13:33 - INFO - datasets.utils.info_utils - All the splits matched successfully.
+Dataset open_r1-math-220k downloaded and prepared to /root/.cache/huggingface/datasets/open-r1___open_r1-math-220k/default/0.0.0/e4e141ec9dea9f8326f4d347be56105859b2bd68. Subsequent calls will reuse this data.
+2026-02-04 21:13:33 - INFO - datasets.builder - Dataset open_r1-math-220k downloaded and prepared to /root/.cache/huggingface/datasets/open-r1___open_r1-math-220k/default/0.0.0/e4e141ec9dea9f8326f4d347be56105859b2bd68. Subsequent calls will reuse this data.
+tokenizer_config.json: 40.0kB [00:00, 133MB/s]
+tokenizer.model: 100%|█████████████████████| 4.24M/4.24M [00:00<00:00, 5.28MB/s]
+tokenizer.json: 100%|██████████████████████| 17.5M/17.5M [00:00<00:00, 34.1MB/s]
+special_tokens_map.json: 100%|█████████████████| 636/636 [00:00<00:00, 7.04MB/s]
+[INFO|tokenization_utils_base.py:2023] 2026-02-04 21:13:36,710 >> loading file tokenizer.model from cache at /root/.cache/huggingface/hub/models--unsloth--gemma-2b/snapshots/7ac9d201a57c8cdc6f939069fc0f044c60197a4a/tokenizer.model      
+[INFO|tokenization_utils_base.py:2023] 2026-02-04 21:13:36,710 >> loading file tokenizer.json from cache at /root/.cache/huggingface/hub/models--unsloth--gemma-2b/snapshots/7ac9d201a57c8cdc6f939069fc0f044c60197a4a/tokenizer.json        
+[INFO|tokenization_utils_base.py:2023] 2026-02-04 21:13:36,710 >> loading file added_tokens.json from cache at None
+[INFO|tokenization_utils_base.py:2023] 2026-02-04 21:13:36,710 >> loading file special_tokens_map.json from cache at /root/.cache/huggingface/hub/models--unsloth--gemma-2b/snapshots/7ac9d201a57c8cdc6f939069fc0f044c60197a4a/special_tokens_map.json
+[INFO|tokenization_utils_base.py:2023] 2026-02-04 21:13:36,710 >> loading file tokenizer_config.json from cache at /root/.cache/huggingface/hub/models--unsloth--gemma-2b/snapshots/7ac9d201a57c8cdc6f939069fc0f044c60197a4a/tokenizer_config.json
+[INFO|tokenization_utils_base.py:2023] 2026-02-04 21:13:36,710 >> loading file chat_template.jinja from cache at None
+2026-02-04 21:13:37 - INFO - __main__ - *** Loading model ***
+config.json: 100%|█████████████████████████████| 721/721 [00:00<00:00, 5.86MB/s]
+[INFO|configuration_utils.py:698] 2026-02-04 21:13:37,744 >> loading configuration file config.json from cache at /root/.cache/huggingface/hub/models--unsloth--gemma-2b/snapshots/7ac9d201a57c8cdc6f939069fc0f044c60197a4a/config.json     
+[INFO|configuration_utils.py:770] 2026-02-04 21:13:37,745 >> Model config GemmaConfig {
+"architectures": [
+"GemmaForCausalLM"
+],
+"attention_bias": false,
+"attention_dropout": 0.0,
+"bos_token_id": 2,
+"eos_token_id": 1,
+"head_dim": 256,
+"hidden_act": "gelu",
+"hidden_activation": null,
+"hidden_size": 2048,
+"initializer_range": 0.02,
+"intermediate_size": 16384,
+"max_position_embeddings": 8192,
+"model_type": "gemma",
+"num_attention_heads": 8,
+"num_hidden_layers": 18,
+"num_key_value_heads": 1,
+"pad_token_id": 0,
+"rms_norm_eps": 1e-06,
+"rope_scaling": null,
+"rope_theta": 10000.0,
+"torch_dtype": "bfloat16",
+"transformers_version": "4.52.3",
+"unsloth_version": "2024.9",
+"use_cache": false,
+"vocab_size": 256000
+}
+model.safetensors: 100%|████████████████████| 5.01G/5.01G [00:08<00:00, 617MB/s]
+[INFO|modeling_utils.py:1150] 2026-02-04 21:13:46,463 >> loading weights file model.safetensors from cache at /root/.cache/huggingface/hub/models--unsloth--gemma-2b/snapshots/7ac9d201a57c8cdc6f939069fc0f044c60197a4a/model.safetensors   
+[INFO|modeling_utils.py:2240] 2026-02-04 21:13:46,464 >> Instantiating GemmaForCausalLM model under default dtype torch.bfloat16.
+[INFO|configuration_utils.py:1135] 2026-02-04 21:13:46,466 >> Generate config GenerationConfig {
+"bos_token_id": 2,
+"eos_token_id": 1,
+"pad_token_id": 0,
+"use_cache": false
+}
+[INFO|modeling_utils.py:5130] 2026-02-04 21:13:46,493 >> All model checkpoint weights were used when initializing GemmaForCausalLM.
+[INFO|modeling_utils.py:5138] 2026-02-04 21:13:46,493 >> All the weights of GemmaForCausalLM were initialized from the model checkpoint at unsloth/gemma-2b.
+If your task is similar to the task the model of the checkpoint was trained on, you can already use GemmaForCausalLM for predictions without further training.
+generation_config.json: 100%|██████████████████| 154/154 [00:00<00:00, 1.24MB/s]
+[INFO|configuration_utils.py:1090] 2026-02-04 21:13:47,202 >> loading configuration file generation_config.json from cache at /root/.cache/huggingface/hub/models--unsloth--gemma-2b/snapshots/7ac9d201a57c8cdc6f939069fc0f044c60197a4a/generation_config.json
+[INFO|configuration_utils.py:1135] 2026-02-04 21:13:47,202 >> Generate config GenerationConfig {
+"bos_token_id": 2,
+"eos_token_id": 1,
+"max_length": 8192,
+"pad_token_id": 0
+}
+Map:   0%|                                     | 0/93733 [00:00<?, ? examples/s]Caching processed dataset at /root/.cache/huggingface/datasets/open-r1___open_r1-math-220k/default/0.0.0/e4e141ec9dea9f8326f4d347be56105859b2bd68/cache-0083c9c243e0af54.arrow
+2026-02-04 21:13:47 - INFO - datasets.arrow_dataset - Caching processed dataset at /root/.cache/huggingface/datasets/open-r1___open_r1-math-220k/default/0.0.0/e4e141ec9dea9f8326f4d347be56105859b2bd68/cache-0083c9c243e0af54.arrow        
+Map: 100%|███████████████████████| 93733/93733 [00:13<00:00, 7011.80 examples/s]
+2026-02-04 21:14:01 - INFO - liger_kernel.transformers.monkey_patch - Applying Liger kernels to model instance with model type: gemma with kwargs: {}
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/opt/openr1-venv/lib/python3.11/site-packages/huggingface_hub/utils/_http.py", line 403, in hf_raise_for_status
+[rank0]:     response.raise_for_status()
+[rank0]:   File "/opt/openr1-venv/lib/python3.11/site-packages/requests/models.py", line 1026, in raise_for_status
+[rank0]:     raise HTTPError(http_error_msg, response=self)
+[rank0]: requests.exceptions.HTTPError: 401 Client Error: Unauthorized for url: https://huggingface.co/api/repos/create
+[rank0]: The above exception was the direct cause of the following exception:
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/opt/open-r1/src/open_r1/grpo.py", line 181, in <module>
+[rank0]:     main(script_args, training_args, model_args)
+[rank0]:   File "/opt/open-r1/src/open_r1/grpo.py", line 112, in main
+[rank0]:     trainer = GRPOTrainer(
+[rank0]:               ^^^^^^^^^^^^
+[rank0]:   File "/opt/openr1-venv/lib/python3.11/site-packages/trl/trainer/grpo_trainer.py", line 541, in __init__
+[rank0]:     super().__init__(
+[rank0]:   File "/opt/openr1-venv/lib/python3.11/site-packages/transformers/utils/deprecation.py", line 172, in wrapped_func
+[rank0]:     return func(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/opt/openr1-venv/lib/python3.11/site-packages/transformers/trainer.py", line 698, in __init__
+[rank0]:     self.init_hf_repo()
+[rank0]:   File "/opt/openr1-venv/lib/python3.11/site-packages/transformers/trainer.py", line 4644, in init_hf_repo
+[rank0]:     repo_url = create_repo(repo_name, token=token, private=self.args.hub_private_repo, exist_ok=True)
+[rank0]:                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/opt/openr1-venv/lib/python3.11/site-packages/huggingface_hub/utils/_validators.py", line 114, in _inner_fn
+[rank0]:     return fn(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/opt/openr1-venv/lib/python3.11/site-packages/huggingface_hub/hf_api.py", line 3760, in create_repo
+[rank0]:     hf_raise_for_status(r)
+[rank0]:   File "/opt/openr1-venv/lib/python3.11/site-packages/huggingface_hub/utils/_http.py", line 476, in hf_raise_for_status
+[rank0]:     raise _format(HfHubHTTPError, str(e), response) from e
+[rank0]: huggingface_hub.errors.HfHubHTTPError: 401 Client Error: Unauthorized for url: https://huggingface.co/api/repos/create (Request ID: Root=1-6983b699-69656a5a4f419f8a21d750a4;e93dfd2d-8f44-4c78-8ae8-e363fccc81d6)
+[rank0]: Invalid username or password.
+[rank0]:[W204 21:14:02.029183873 ProcessGroupNCCL.cpp:1496] Warning: WARNING: destroy_process_group() was not called before program exit, which can leak resources. For more info, please see https://pytorch.org/docs/stable/distributed.html#shutdown (function operator())
+E0204 21:14:03.187000 1328 torch/distributed/elastic/multiprocessing/api.py:869] failed (exitcode: 1) local_rank: 0 (pid: 1562) of binary: /opt/openr1-venv/bin/python
+Traceback (most recent call last):
+File "/opt/openr1-venv/bin/accelerate", line 6, in <module>
+sys.exit(main())
+^^^^^^
+File "/opt/openr1-venv/lib/python3.11/site-packages/accelerate/commands/accelerate_cli.py", line 48, in main
+args.func(args)
+File "/opt/openr1-venv/lib/python3.11/site-packages/accelerate/commands/launch.py", line 1182, in launch_command
+deepspeed_launcher(args)
+File "/opt/openr1-venv/lib/python3.11/site-packages/accelerate/commands/launch.py", line 861, in deepspeed_launcher
+distrib_run.run(args)
+File "/opt/openr1-venv/lib/python3.11/site-packages/torch/distributed/run.py", line 909, in run
+elastic_launch(
+File "/opt/openr1-venv/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 138, in __call__
+return launch_agent(self._config, self._entrypoint, list(args))
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "/opt/openr1-venv/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 269, in launch_agent
+raise ChildFailedError(
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError:
+============================================================
+src/open_r1/grpo.py FAILED
+------------------------------------------------------------
+Failures:
+<NO_OTHER_FAILURES>
+------------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+time      : 2026-02-04_21:14:03
+host      : e40628a7455e
+rank      : 0 (local_rank: 0)
+exitcode  : 1 (pid: 1562)
+error_file: <N/A>
+traceback : To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html
+============================================================
+(venv) PS C:\Users\lyani\ClaudeProjects\thinkingConversion> 
