@@ -317,6 +317,20 @@ def parse_args() -> argparse.Namespace:
         choices=[2, 3],
         help="DeepSpeed ZeRO stage for Accelerate config.",
     )
+    parser.add_argument(
+        "--use-vllm",
+        dest="use_vllm",
+        action="store_true",
+        help="Use vLLM for generation (faster, higher memory use).",
+    )
+    parser.add_argument(
+        "--no-vllm",
+        "--disable-vllm",
+        dest="use_vllm",
+        action="store_false",
+        help="Disable vLLM and use transformers generation (slower, safer).",
+    )
+    parser.set_defaults(use_vllm=True)
     parser.add_argument("--vllm-mode", default="colocate")
     parser.add_argument("--report-to", default="none", help="Set to wandb to enable W&B logging.")
     parser.add_argument("--output-dir", default=None)
@@ -555,7 +569,7 @@ def build_grpo_config(
         "dataset_prompt_column": args.dataset_prompt_column,
         "system_prompt": system_prompt,
         "bf16": True,
-        "use_vllm": True,
+        "use_vllm": args.use_vllm,
         "do_eval": False,
         "gradient_accumulation_steps": args.gradient_accumulation_steps,
         "gradient_checkpointing": True,
@@ -791,8 +805,15 @@ def build_setup_script(debug: bool, install_flash_attn: bool) -> str:
     ).strip() + "\n"
 
 
-def build_train_script(accel_config_path: str, grpo_config_path: str, vllm_mode: str, debug: bool) -> str:
+def build_train_script(
+    accel_config_path: str,
+    grpo_config_path: str,
+    vllm_mode: str,
+    use_vllm: bool,
+    debug: bool,
+) -> str:
     debug_line = "set -x" if debug else ""
+    vllm_flag = f" --vllm_mode {vllm_mode}" if use_vllm else ""
     return "\n".join(
         [
             "#!/usr/bin/env bash",
@@ -824,7 +845,7 @@ def build_train_script(accel_config_path: str, grpo_config_path: str, vllm_mode:
             "cd /opt/open-r1",
             "ACCELERATE_LOG_LEVEL=info \\",
             f"accelerate launch --config_file {accel_config_path} \\",
-            f"  src/open_r1/grpo.py --config {grpo_config_path} --vllm_mode {vllm_mode}",
+            f"  src/open_r1/grpo.py --config {grpo_config_path}{vllm_flag}",
             "",
         ]
     ).strip() + "\n"
@@ -995,6 +1016,7 @@ def main() -> int:
             remote_accel_config_path,
             remote_config_path,
             args.vllm_mode,
+            args.use_vllm,
             args.debug_remote,
         )
         remote_train_path = f"{remote_dir}/train.sh"

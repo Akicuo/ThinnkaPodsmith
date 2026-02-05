@@ -84,6 +84,12 @@ The runner generates an Accelerate config that matches your `--gpu-count`.
 You can switch ZeRO stage with:
 - `--deepspeed-stage 2` or `--deepspeed-stage 3`
 
+## GRPO generation backend
+GRPO is an online method: it must generate completions during training to compute rewards.
+By default the runner uses vLLM for faster generation. If you hit vLLM/NCCL issues,
+you can switch to the transformers generation path:
+- `--no-vllm` (slower, but avoids vLLM-specific hangs)
+
 ## GRPO generations
 `num_generations` must divide the effective batch size. The runner auto-adjusts
 if needed. Override with:
