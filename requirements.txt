@@ -1,5 +1,6 @@
 huggingface_hub
 httpx
+discord-webhook-async
 paramiko
 PyYAML
 python-dotenv

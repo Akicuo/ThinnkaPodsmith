@@ -26,6 +26,7 @@ Provision Runpod Pods for GRPO fine-tuning with the Open R1 repo. This project:
 - `RUNPOD_API_KEY` (required)
 - `HF_TOKEN` or `HUGGINGFACE_HUB_TOKEN` (required)
 - `PROGRESS_WEBHOOK_URL` (optional, async progress events)
+- `DISCORD_WEBHOOK_URL` (optional, Discord progress logs)
 - `SSH_PUBLIC_KEY` or `RUNPOD_SSH_PUBLIC_KEY` (recommended)
 - `SSH_PRIVATE_KEY_PATH` (optional, defaults to `~/.ssh/id_ed25519`)
 - `WANDB_API_KEY` (optional if you pass `--report-to wandb`)
@@ -52,6 +53,10 @@ Set `PROGRESS_WEBHOOK_URL` to receive JSON updates. Payload includes:
 - `stage` (setup or train when streaming logs)
 - `project`
 - `repo_id`
+
+## Discord webhook
+Set `DISCORD_WEBHOOK_URL` or pass `--discord-webhook-url` to send the same events to Discord.
+Each event is sent as a text message (errors include recent output).
 
 ## Quick start
 Runs the test case model and creates a Pod with the default image (no answer tags):
@@ -113,7 +118,7 @@ Notes:
 5. Waits for SSH on port 22, then installs Open R1 if needed.
 6. Generates a GRPO config and launches training.
 7. Uses `HF_TOKEN` to push to the Hub.
-8. Streams progress lines to `PROGRESS_WEBHOOK_URL`.
+8. Streams progress lines to `PROGRESS_WEBHOOK_URL` and optionally `DISCORD_WEBHOOK_URL`.
 
 ## Reasoning tag behavior
 By default, the config uses `<think> ... </think>` and **no answer tags** (accuracy reward only).

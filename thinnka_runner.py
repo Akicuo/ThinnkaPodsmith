@@ -23,6 +23,10 @@ import yaml
 from dotenv import find_dotenv, load_dotenv
 from huggingface_hub import HfApi, hf_hub_download
 from huggingface_hub.errors import GatedRepoError, HfHubHTTPError, RepositoryNotFoundError
+try:
+    from discord_webhook_async import DiscordWebhook
+except ImportError:
+    DiscordWebhook = None
 
 PROJECT_NAME = "Thinnka Podsmith"
 RUNPOD_GRAPHQL_URL = "https://api.runpod.io/graphql"
@@ -55,15 +59,72 @@ DEFAULT_CHAT_TEMPLATE = (
     "{% endif %}"
 )
 
+DISCORD_MAX_CONTENT = 2000
+
+
+def _truncate_text(text: str, max_len: int) -> str:
+    if max_len <= 0:
+        return ""
+    if len(text) <= max_len:
+        return text
+    if max_len <= 3:
+        return text[:max_len]
+    return text[: max_len - 3] + "..."
+
+
+def format_discord_message(payload: Dict[str, Any]) -> str:
+    project = str(payload.get("project") or "").strip()
+    repo_id = str(payload.get("repo_id") or "").strip()
+    event = str(payload.get("event") or "event").strip()
+    message = payload.get("message")
+    stage = payload.get("stage")
+    tail = payload.get("tail")
+
+    header_parts = []
+    if project and repo_id:
+        header_parts.append(f"[{project} | {repo_id}]")
+    elif project:
+        header_parts.append(f"[{project}]")
+    elif repo_id:
+        header_parts.append(f"[{repo_id}]")
+    header_parts.append(event)
+    if stage:
+        header_parts.append(f"({stage})")
+    header = " ".join(header_parts).strip()
+    if message:
+        header = f"{header}: {str(message).strip()}"
+    header = _truncate_text(header, DISCORD_MAX_CONTENT)
+
+    if tail:
+        tail_text = str(tail).strip().replace("```", "'''")
+        if tail_text:
+            max_tail = DISCORD_MAX_CONTENT - len(header) - (len("\n```") + len("```"))
+            if max_tail > 0:
+                tail_text = _truncate_text(tail_text, max_tail)
+                return f"{header}\n```{tail_text}```"
+
+    return header
+
 
 class ProgressReporter:
-    def __init__(self, url: Optional[str], base_payload: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(
+        self,
+        url: Optional[str],
+        base_payload: Optional[Dict[str, Any]] = None,
+        discord_url: Optional[str] = None,
+    ) -> None:
         self.url = url
+        self.discord_url = discord_url
         self.base_payload = base_payload or {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._queue: Optional[asyncio.Queue] = None
         self._thread: Optional[threading.Thread] = None
-        if self.url:
+        if self.discord_url and DiscordWebhook is None:
+            raise RuntimeError(
+                "Discord webhook configured but discord-webhook-async is not installed. "
+                "Install with `pip install discord-webhook-async`."
+            )
+        if self.url or self.discord_url:
             self._start()
 
     def _start(self) -> None:
@@ -82,22 +143,44 @@ class ProgressReporter:
             time.sleep(0.01)
 
     async def _worker(self) -> None:
-        if not self.url or not self._queue:
+        if not self._queue:
             return
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        http_client: Optional[httpx.AsyncClient] = None
+        webhook = None
+        try:
+            if self.url:
+                http_client = httpx.AsyncClient(timeout=10.0)
+            if self.discord_url:
+                webhook = DiscordWebhook(self.discord_url)
             while True:
                 payload = await self._queue.get()
                 if payload is None:
                     break
+                if http_client and self.url:
+                    try:
+                        await http_client.post(self.url, json=payload)
+                    except Exception:
+                        pass
+                if webhook:
+                    content = format_discord_message(payload)
+                    if content:
+                        try:
+                            await webhook.send_message(content=content)
+                        except Exception:
+                            pass
+        finally:
+            if webhook:
                 try:
-                    await client.post(self.url, json=payload)
+                    await webhook.close()
                 except Exception:
                     pass
+            if http_client:
+                await http_client.aclose()
         if self._loop:
             self._loop.stop()
 
     def send(self, event: str, message: Optional[str] = None, extra: Optional[Dict[str, Any]] = None) -> None:
-        if not self.url or not self._loop or not self._queue:
+        if not (self.url or self.discord_url) or not self._loop or not self._queue:
             return
         payload = dict(self.base_payload)
         payload["event"] = event
@@ -109,7 +192,7 @@ class ProgressReporter:
         self._loop.call_soon_threadsafe(self._queue.put_nowait, payload)
 
     def close(self) -> None:
-        if not self.url or not self._loop or not self._queue or not self._thread:
+        if not (self.url or self.discord_url) or not self._loop or not self._queue or not self._thread:
             return
         self._loop.call_soon_threadsafe(self._queue.put_nowait, None)
         self._thread.join(timeout=5)
@@ -242,6 +325,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ssh-private-key", default=None, help="Path to SSH private key.")
     parser.add_argument("--ssh-public-key", default=None, help="SSH public key string.")
     parser.add_argument("--progress-url", default=None, help="Override PROGRESS_WEBHOOK_URL.")
+    parser.add_argument(
+        "--discord-webhook-url",
+        "--discord-webhook",
+        dest="discord_webhook_url",
+        default=None,
+        help="Discord webhook URL for progress logs.",
+    )
     parser.add_argument("--ssh-timeout-min", type=int, default=20)
     parser.add_argument("--env-file", default=None, help="Path to a .env file (defaults to .env).")
     parser.add_argument("--debug-remote", action="store_true", help="Enable verbose remote shell output.")
@@ -764,8 +854,13 @@ def main() -> int:
 
     ssh_public_key, ssh_private_key_path = ensure_ssh_key_material(args)
     progress_url = args.progress_url or os.getenv("PROGRESS_WEBHOOK_URL")
+    discord_webhook_url = args.discord_webhook_url or os.getenv("DISCORD_WEBHOOK_URL")
 
-    reporter = ProgressReporter(progress_url, {"project": PROJECT_NAME, "repo_id": args.repo_id})
+    reporter = ProgressReporter(
+        progress_url,
+        {"project": PROJECT_NAME, "repo_id": args.repo_id},
+        discord_webhook_url,
+    )
     ssh_client: Optional[paramiko.SSHClient] = None
     client: Optional[RunpodGraphQLClient] = None
     pod_id: Optional[str] = None
