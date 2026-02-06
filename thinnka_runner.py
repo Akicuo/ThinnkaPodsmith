@@ -30,6 +30,7 @@ except ImportError:
 
 PROJECT_NAME = "Thinnka Podsmith"
 RUNPOD_GRAPHQL_URL = "https://api.runpod.io/graphql"
+RUNPOD_REST_URL = "https://rest.runpod.io/v1"
 
 DEFAULT_IMAGE = "runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404"
 CUSTOM_IMAGE = "reeeon/thinnka:latest"
@@ -119,11 +120,6 @@ class ProgressReporter:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._queue: Optional[asyncio.Queue] = None
         self._thread: Optional[threading.Thread] = None
-        if self.discord_url and DiscordWebhook is None:
-            raise RuntimeError(
-                "Discord webhook configured but discord-webhook-async is not installed. "
-                "Install with `pip install discord-webhook-async`."
-            )
         if self.url or self.discord_url:
             self._start()
 
@@ -148,9 +144,9 @@ class ProgressReporter:
         http_client: Optional[httpx.AsyncClient] = None
         webhook = None
         try:
-            if self.url:
+            if self.url or self.discord_url:
                 http_client = httpx.AsyncClient(timeout=10.0)
-            if self.discord_url:
+            if self.discord_url and DiscordWebhook is not None:
                 webhook = DiscordWebhook(self.discord_url)
             while True:
                 payload = await self._queue.get()
@@ -161,13 +157,19 @@ class ProgressReporter:
                         await http_client.post(self.url, json=payload)
                     except Exception:
                         pass
-                if webhook:
+                if self.discord_url:
                     content = format_discord_message(payload)
                     if content:
-                        try:
-                            await webhook.send_message(content=content)
-                        except Exception:
-                            pass
+                        if webhook:
+                            try:
+                                await webhook.send_message(content=content)
+                            except Exception:
+                                pass
+                        elif http_client:
+                            try:
+                                await http_client.post(self.discord_url, json={"content": content})
+                            except Exception:
+                                pass
         finally:
             if webhook:
                 try:
@@ -273,16 +275,43 @@ class RunpodGraphQLClient:
         data = self.query(query, {"podId": pod_id})
         return data["podTerminate"]
 
+    def get_pod_status(self, pod_id: str) -> Dict[str, Any]:
+        query = """
+        query Pod($podId: String!) {
+          pod(input: { podId: $podId }) {
+            id
+            desiredStatus
+            locked
+          }
+        }
+        """
+        data = self.query(query, {"podId": pod_id})
+        return data.get("pod") or {}
+
+    def delete_pod(self, pod_id: str) -> None:
+        url = f"{RUNPOD_REST_URL}/pods/{pod_id}"
+        response = self.client.delete(
+            url,
+            headers={"Authorization": f"Bearer {self.api_key}"},
+        )
+        if response.status_code in (200, 202, 204, 404):
+            return
+        raise RuntimeError(
+            f"REST pod delete failed ({response.status_code}): {response.text}"
+        )
+
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Provision a Runpod Pod and run Open R1 GRPO training.")
+    parser = argparse.ArgumentParser(
+        description="Provision a Runpod Pod and run Open R1 GRPO or SFT training."
+    )
     parser.add_argument("--repo-id", default="unsloth/gemma-2b", help="Hugging Face model repo id.")
     parser.add_argument("--gpu-count", type=int, default=1, help="GPU count (1, 2, 4, 6, 8).")
     parser.add_argument("--image", default=DEFAULT_IMAGE, help="Docker image for the Pod.")
     parser.add_argument("--use-thinnka-image", action="store_true", help="Use reeeon/thinnka:latest.")
     parser.add_argument("--pod-name", default=None, help="Custom Pod name.")
     parser.add_argument("--cloud-type", default="ALL", choices=["ALL", "SECURE", "COMMUNITY"])
-    parser.add_argument("--volume-gb", type=int, default=None, help="Persistent volume size in GB.")
+    parser.add_argument("--volume-gb", type=int, default=300, help="Persistent volume size in GB.")
     parser.add_argument("--container-disk-gb", type=int, default=None, help="Container disk size in GB.")
     parser.add_argument("--min-vcpu", type=int, default=4)
     parser.add_argument("--min-memory", type=int, default=16)
@@ -304,6 +333,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-generations", type=int, default=16)
     parser.add_argument("--max-prompt-length", type=int, default=512)
     parser.add_argument("--max-completion-length", type=int, default=2048)
+    parser.add_argument("--sft", action="store_true", help="Use Open R1 SFT training instead of GRPO.")
     parser.add_argument(
         "--attn-implementation",
         default="sdpa",
@@ -374,11 +404,36 @@ def cleanup_pod(
         reporter.send("pod_stopped", f"Pod {pod_id} stopped.")
     except Exception as exc:
         reporter.send("cleanup_error", f"Failed to stop pod {pod_id}: {exc}")
-    try:
-        client.terminate_pod(pod_id)
-        reporter.send("pod_terminated", f"Pod {pod_id} terminated.")
-    except Exception as exc:
-        reporter.send("cleanup_error", f"Failed to terminate pod {pod_id}: {exc}")
+
+    for attempt in range(12):
+        try:
+            status = client.get_pod_status(pod_id)
+        except Exception as exc:
+            reporter.send("cleanup_error", f"Failed to fetch pod status for {pod_id}: {exc}")
+            status = {}
+        desired = str(status.get("desiredStatus") or "").upper()
+        locked = bool(status.get("locked")) if status else False
+        if locked:
+            reporter.send("cleanup_wait", f"Pod {pod_id} is locked; waiting before termination.")
+        if desired in {"RUNNING", "RESTARTING"}:
+            reporter.send("cleanup_wait", f"Pod {pod_id} is {desired}; waiting to terminate.")
+            time.sleep(10)
+            continue
+        if desired:
+            reporter.send("cleanup_wait", f"Pod {pod_id} status {desired}; attempting termination.")
+        break
+
+    for attempt in range(1, 6):
+        try:
+            client.delete_pod(pod_id)
+            reporter.send("pod_terminated", f"Pod {pod_id} terminated.")
+            return
+        except Exception as exc:
+            reporter.send(
+                "cleanup_error",
+                f"Failed to terminate pod {pod_id} (attempt {attempt}/5): {exc}",
+            )
+            time.sleep(10)
 
 
 def ensure_model_not_gated(api: HfApi, repo_id: str, token: str):
@@ -607,6 +662,64 @@ def build_grpo_config(
     return config
 
 
+def apply_qlora_config(config: Dict[str, Any]) -> None:
+    config.update(
+        {
+            "use_peft": True,
+            "load_in_4bit": True,
+            "use_bnb_nested_quant": True,
+            "bnb_4bit_quant_type": "nf4",
+            "lora_r": 16,
+            "lora_alpha": 32,
+            "lora_dropout": 0.05,
+            "lora_target_modules": "all-linear",
+        }
+    )
+
+
+def build_sft_config(
+    args: argparse.Namespace,
+    hub_model_id: str,
+    chat_template: Optional[str],
+) -> Dict[str, Any]:
+    report_to = [] if args.report_to == "none" else [args.report_to]
+    output_dir = args.output_dir or f"/workspace/models/{hub_model_id.replace('/', '-')}"
+    max_seq_length = max(1, args.max_prompt_length + args.max_completion_length)
+
+    config: Dict[str, Any] = {
+        "model_name_or_path": args.repo_id,
+        "model_revision": "main",
+        "torch_dtype": "bfloat16",
+        "attn_implementation": args.attn_implementation,
+        "dataset_name": args.dataset_name,
+        "bf16": True,
+        "gradient_accumulation_steps": args.gradient_accumulation_steps,
+        "gradient_checkpointing": True,
+        "gradient_checkpointing_kwargs": {"use_reentrant": False},
+        "hub_model_id": hub_model_id,
+        "hub_strategy": "every_save",
+        "log_level": "info",
+        "logging_first_step": True,
+        "logging_steps": 1,
+        "logging_strategy": "steps",
+        "max_seq_length": max_seq_length,
+        "num_train_epochs": args.num_train_epochs,
+        "output_dir": output_dir,
+        "overwrite_output_dir": True,
+        "per_device_train_batch_size": args.per_device_train_batch,
+        "push_to_hub": True,
+        "report_to": report_to,
+        "save_strategy": "epoch",
+        "save_total_limit": 1,
+        "seed": 42,
+        "use_liger_kernel": True,
+    }
+    if chat_template:
+        config["chat_template"] = chat_template
+    apply_qlora_config(config)
+    return config
+
+
 def build_accelerate_config(num_processes: int, zero_stage: int) -> str:
     config = {
         "compute_environment": "LOCAL_MACHINE",
@@ -663,6 +776,7 @@ def run_ssh_command(
     def handle_line(line: str) -> None:
         nonlocal last_report
         recent_lines.append(line)
+        print(f"[{stage}] {line}", flush=True)
         now = time.time()
         if now - last_report >= 1.0:
             reporter.send("training_progress", line, extra={"stage": stage})
@@ -807,13 +921,15 @@ def build_setup_script(debug: bool, install_flash_attn: bool) -> str:
 
 def build_train_script(
     accel_config_path: str,
-    grpo_config_path: str,
+    train_config_path: str,
+    training_script: str,
     vllm_mode: str,
     use_vllm: bool,
     debug: bool,
 ) -> str:
     debug_line = "set -x" if debug else ""
     vllm_flag = f" --vllm_mode {vllm_mode}" if use_vllm else ""
+    is_grpo = training_script.endswith("grpo.py")
     return "\n".join(
         [
             "#!/usr/bin/env bash",
@@ -878,44 +994,50 @@ def build_train_script(
             "  sed -i \"s/^num_processes: .*/num_processes: $VISIBLE_GPUS/\" \"$ACCEL_CONFIG\"",
             "fi",
             "export VISIBLE_GPUS",
-            f"GRPO_CONFIG=\"{grpo_config_path}\"",
-            "export GRPO_CONFIG",
-            "python - <<'PY'",
-            "import os, re",
-            "visible = int(os.environ.get('VISIBLE_GPUS', '0'))",
-            "path = os.environ.get('GRPO_CONFIG')",
-            "if path and visible > 0:",
-            "    with open(path, 'r', encoding='utf-8') as handle:",
-            "        text = handle.read()",
-            "    def get_int(key: str):",
-            "        pattern = r'^' + re.escape(key) + r':\\s*(\\d+)\\s*$'",
-            "        match = re.search(pattern, text, flags=re.M)",
-            "        return int(match.group(1)) if match else None",
-            "    per_device = get_int('per_device_train_batch_size')",
-            "    grad_accum = get_int('gradient_accumulation_steps')",
-            "    num_generations = get_int('num_generations')",
-            "    if None not in (per_device, grad_accum, num_generations):",
-            "        effective = per_device * grad_accum * visible",
-            "        if effective > 0 and effective % num_generations != 0:",
-            "            divisors = [d for d in range(1, num_generations + 1) if effective % d == 0]",
-            "            new_gen = max(divisors) if divisors else 1",
-            "            if new_gen != num_generations:",
-            "                text = re.sub(",
-            "                    r'^num_generations:\\s*\\d+\\s*$',",
-            "                    f'num_generations: {new_gen}',",
-            "                    text,",
-            "                    flags=re.M,",
-            "                )",
-            "                with open(path, 'w', encoding='utf-8') as handle:",
-            "                    handle.write(text)",
-            "                print(",
-            "                    f'Adjusted num_generations from {num_generations} to {new_gen} '",
-            "                    f'to divide effective batch {effective}.'",
-            "                )",
-            "PY",
+            f"TRAIN_CONFIG=\"{train_config_path}\"",
+            "export TRAIN_CONFIG",
+            *(
+                [
+                    "python - <<'PY'",
+                    "import os, re",
+                    "visible = int(os.environ.get('VISIBLE_GPUS', '0'))",
+                    "path = os.environ.get('TRAIN_CONFIG')",
+                    "if path and visible > 0:",
+                    "    with open(path, 'r', encoding='utf-8') as handle:",
+                    "        text = handle.read()",
+                    "    def get_int(key: str):",
+                    "        pattern = r'^' + re.escape(key) + r':\\s*(\\d+)\\s*$'",
+                    "        match = re.search(pattern, text, flags=re.M)",
+                    "        return int(match.group(1)) if match else None",
+                    "    per_device = get_int('per_device_train_batch_size')",
+                    "    grad_accum = get_int('gradient_accumulation_steps')",
+                    "    num_generations = get_int('num_generations')",
+                    "    if None not in (per_device, grad_accum, num_generations):",
+                    "        effective = per_device * grad_accum * visible",
+                    "        if effective > 0 and effective % num_generations != 0:",
+                    "            divisors = [d for d in range(1, num_generations + 1) if effective % d == 0]",
+                    "            new_gen = max(divisors) if divisors else 1",
+                    "            if new_gen != num_generations:",
+                    "                text = re.sub(",
+                    "                    r'^num_generations:\\s*\\d+\\s*$',",
+                    "                    f'num_generations: {new_gen}',",
+                    "                    text,",
+                    "                    flags=re.M,",
+                    "                )",
+                    "                with open(path, 'w', encoding='utf-8') as handle:",
+                    "                    handle.write(text)",
+                    "                print(",
+                    "                    f'Adjusted num_generations from {num_generations} to {new_gen} '",
+                    "                    f'to divide effective batch {effective}.'",
+                    "                )",
+                    "PY",
+                ]
+                if is_grpo
+                else []
+            ),
             "ACCELERATE_LOG_LEVEL=info \\",
             f"accelerate launch --config_file {accel_config_path} \\",
-            f"  src/open_r1/grpo.py --config {grpo_config_path}{vllm_flag}",
+            f"  {training_script} --config {train_config_path}{vllm_flag}",
             "",
         ]
     ).strip() + "\n"
@@ -1038,26 +1160,37 @@ def main() -> int:
         reporter.send("ssh_connected", "SSH connected.")
 
         hub_model_id = args.hub_model_id
+        training_mode = "sft" if args.sft else "grpo"
         if not hub_model_id:
             whoami = hf_api.whoami(token=hf_token)
             user = whoami.get("name") or whoami.get("user") or "unknown"
             base_name = args.repo_id.split("/")[-1]
-            hub_model_id = f"{user}/{base_name}-grpo-thinnka"
+            hub_model_id = f"{user}/{base_name}-{training_mode}-thinnka"
 
         chat_template = resolve_chat_template(hf_api, args.repo_id, hf_token, model_info, args.chat_template)
-        config = build_grpo_config(args, hub_model_id, chat_template)
+        if args.sft:
+            config = build_sft_config(args, hub_model_id, chat_template)
+        else:
+            config = build_grpo_config(args, hub_model_id, chat_template)
         if chat_template:
             reporter.send("chat_template", "Using custom chat template.")
-        if config.get("num_generations") != args.num_generations:
+        if not args.sft and config.get("num_generations") != args.num_generations:
             reporter.send(
                 "num_generations_adjusted",
                 f"Adjusted num_generations to {config.get('num_generations')} "
                 f"to match effective batch size.",
             )
         config_text = yaml.safe_dump(config, sort_keys=False)
-        accel_config_text = build_accelerate_config(args.gpu_count, args.deepspeed_stage)
+        deepspeed_stage = args.deepspeed_stage
+        if args.sft and deepspeed_stage == 3:
+            deepspeed_stage = 2
+            reporter.send(
+                "deepspeed_adjusted",
+                "QLoRA SFT is incompatible with ZeRO-3; using ZeRO-2 instead.",
+            )
+        accel_config_text = build_accelerate_config(args.gpu_count, deepspeed_stage)
         remote_dir = "/workspace/thinnka"
-        remote_config_path = f"{remote_dir}/grpo_config.yaml"
+        remote_config_path = f"{remote_dir}/{training_mode}_config.yaml"
         remote_accel_config_path = f"{remote_dir}/accelerate.yaml"
         remote_token_path = f"{remote_dir}/hf_token"
 
@@ -1081,12 +1214,13 @@ def main() -> int:
         else:
             reporter.send("setup_skip", "Skipping Open R1 setup.")
 
-        reporter.send("train_start", "Starting GRPO training.")
+        reporter.send("train_start", f"Starting {training_mode.upper()} training.")
         train_script = build_train_script(
             remote_accel_config_path,
             remote_config_path,
+            "src/open_r1/sft.py" if args.sft else "src/open_r1/grpo.py",
             args.vllm_mode,
-            args.use_vllm,
+            args.use_vllm if not args.sft else False,
             args.debug_remote,
         )
         remote_train_path = f"{remote_dir}/train.sh"

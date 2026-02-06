@@ -1,13 +1,13 @@
 # Thinnka Podsmith
 
-Provision Runpod Pods for GRPO fine-tuning with the Open R1 repo. This project:
+Provision Runpod Pods for GRPO or SFT fine-tuning with the Open R1 repo. This project:
 - checks if a Hugging Face model is gated
 - estimates model size to pick a GPU with enough VRAM
 - prefers L40S, then A100 SXM, then H100 SXM
 - creates a Runpod Pod with a target Docker image
-- SSHes into the Pod to run Open R1 GRPO training
+- SSHes into the Pod to run Open R1 GRPO or SFT training
 - pushes the result to the Hugging Face Hub using your `HF_TOKEN`
-- streams training progress to an async webhook
+- streams training progress to an async webhook and prints remote output locally
 
 ## Prereqs
 - Windows (or WSL) with Python 3.11
@@ -58,9 +58,15 @@ Set `PROGRESS_WEBHOOK_URL` to receive JSON updates. Payload includes:
 Set `DISCORD_WEBHOOK_URL` or pass `--discord-webhook-url` to send the same events to Discord.
 Each event is sent as a text message (errors include recent output).
 
+## Logging
+Remote stdout/stderr lines are printed to the local console with a `[setup]` or `[train]` prefix. Webhook and Discord logs remain throttled to avoid spam.
+
 ## Quick start
-Runs the test case model and creates a Pod with the default image (no answer tags):
+Runs the test case model and creates a Pod with the default image (GRPO, no answer tags):
 - `python thinnka_runner.py --repo-id unsloth/gemma-2b --gpu-count 1`
+
+Run supervised fine-tuning (SFT):
+- `python thinnka_runner.py --repo-id unsloth/gemma-2b --gpu-count 1 --sft`
 
 Use the custom image if you build and push it (see below):
 - `python thinnka_runner.py --repo-id unsloth/gemma-2b --gpu-count 1 --image reeeon/thinnka:latest`
@@ -84,13 +90,24 @@ The runner generates an Accelerate config that matches your `--gpu-count`.
 You can switch ZeRO stage with:
 - `--deepspeed-stage 2` or `--deepspeed-stage 3`
 
-## GRPO generation backend
+## Storage
+The persistent volume defaults to 300 GB. Override it with:
+- `--volume-gb 500`
+
+## SFT mode
+Pass `--sft` to run Open R1's supervised fine-tuning script (`src/open_r1/sft.py`).
+The runner sets `max_seq_length` to `max_prompt_length + max_completion_length` so the existing CLI flags still apply.
+GRPO-only options (reward functions, `--num-generations`, and vLLM) are ignored in SFT mode.
+SFT runs use QLoRA (4-bit + LoRA) rather than full fine-tuning.
+Because QLoRA uses a device map, the runner forces ZeRO-2 when `--sft` is set (ZeRO-3 is incompatible).
+
+## GRPO generation backend (GRPO only)
 GRPO is an online method: it must generate completions during training to compute rewards.
 By default the runner uses vLLM for faster generation. If you hit vLLM/NCCL issues,
 you can switch to the transformers generation path:
 - `--no-vllm` (slower, but avoids vLLM-specific hangs)
 
-## GRPO generations
+## GRPO generations (GRPO only)
 `num_generations` must divide the effective batch size. The runner auto-adjusts
 if needed. Override with:
 - `--num-generations 4`
@@ -122,11 +139,11 @@ Notes:
 3. Queries Runpod GPU types and picks from: L40S, A100 SXM, H100 SXM.
 4. Creates a Pod with your selected GPU count (1, 2, 4, 6, 8).
 5. Waits for SSH on port 22, then installs Open R1 if needed.
-6. Generates a GRPO config and launches training.
+6. Generates a GRPO or SFT config and launches training.
 7. Uses `HF_TOKEN` to push to the Hub.
 8. Streams progress lines to `PROGRESS_WEBHOOK_URL` and optionally `DISCORD_WEBHOOK_URL`.
 
-## Reasoning tag behavior
+## Reasoning tag behavior (GRPO only)
 By default, the config uses `<think> ... </think>` and **no answer tags** (accuracy reward only).
 If you enable answer tags, the script uses Open R1's default format rewards.
 If you change the reasoning or answer tags, the script falls back to safer rewards
