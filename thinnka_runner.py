@@ -1452,13 +1452,76 @@ def build_train_script(
     )
 
 
+def build_custom_readme(
+    repo_id: str,
+    hub_model_id: str,
+    args: argparse.Namespace,
+) -> str:
+    """Generate a custom README.md for the fine-tuned model."""
+
+    # Build the training args section
+    training_args = []
+    training_args.append(f"- **Base Model:** [`{repo_id}`](https://huggingface.co/{repo_id})")
+    training_args.append(f"- **Model Name:** `{hub_model_id}`")
+    training_args.append(f"- **Training Mode:** {'SFT (Supervised Fine-Tuning)' if args.sft else 'GRPO (Group Relative Policy Optimization)'}")
+
+    # Add key training parameters
+    if args.sft:
+        training_args.append(f"- **QLoRA:** {'Yes' if not args.shard_model else 'No (sharded)'}")
+        training_args.append(f"- **ZeRO Stage:** {args.deepspeed_stage}")
+    else:
+        training_args.append(f"- **Num Generations:** {args.num_generations}")
+        training_args.append(f"- **Use vLLM:** {args.use_vllm}")
+
+    training_args.append(f"- **Dataset:** `{args.dataset_name}`")
+    if args.dataset_fraction < 1.0:
+        training_args.append(f"- **Dataset Fraction:** {args.dataset_fraction:.1%}")
+    training_args.append(f"- **Max Steps:** {args.max_steps if args.max_steps > 0 else 'Default (full epochs)'}")
+    training_args.append(f"- **Per Device Batch Size:** {args.per_device_train_batch}")
+    training_args.append(f"- **Gradient Accumulation Steps:** {args.gradient_accumulation_steps}")
+    training_args.append(f"- **Learning Rate:** 1.0e-06")
+    training_args.append(f"- **Attention Implementation:** {args.attn_implementation}")
+    training_args.append(f"- **Trust Remote Code:** {args.trust_remote_code}")
+
+    if args.custom_dependencies:
+        training_args.append(f"- **Custom Dependencies:** {args.custom_dependencies}")
+
+    # Convert to list format
+    args_text = "\n".join(training_args)
+
+    # Create the custom README
+    readme = f"""# {hub_model_id}
+
+This model is a fine-tuned version of [`{repo_id}`](https://huggingface.co/{repo_id}), specifically trained to enhance reasoning capabilities.
+
+## Training Arguments
+
+{args_text}
+
+---
+
+This model was tuned to reason. It has been trained to improve its ability to think through problems step by step and provide well-reasoned responses.
+
+---
+
+"""
+
+    return readme
+
+
 def build_merge_script(
     output_dir: str,
     hub_model_id: str,
     repo_id: str,
     debug: bool,
+    custom_readme: str,
 ) -> str:
     debug_line = "set -x" if debug else ""
+
+    # Escape the custom_readme for bash heredoc
+    # Replace problematic characters
+    custom_readme_escaped = custom_readme.replace("'", "'\"'\"'")
+
     return (
         "\n".join(
             [
@@ -1530,6 +1593,31 @@ def build_merge_script(
                 "print('Saving tokenizer...')",
                 "tokenizer = AutoTokenizer.from_pretrained(base_model_path)",
                 "tokenizer.save_pretrained(output_dir)",
+                "",
+                "print('Generating custom README...')",
+                "from huggingface_hub import hf_hub_download",
+                "from huggingface_hub.utils import hf_bucket_url",
+                "",
+                "# Custom README content",
+                f"custom_readme = '''{custom_readme_escaped}'''",
+                "",
+                "# Fetch original README",
+                "try:",
+                "    original_readme_path = hf_hub_download(",
+                "        repo_id=repo_id,",
+                "        filename='README.md',",
+                "        token=os.environ.get('HF_TOKEN') or os.environ.get('HUGGINGFACE_HUB_TOKEN')",
+                "    )",
+                "    with open(original_readme_path, 'r', encoding='utf-8') as f:",
+                "        original_readme = f.read()",
+                "    readme_content = custom_readme + original_readme",
+                "except Exception as e:",
+                "    print(f'Could not fetch original README: {e}')",
+                "    readme_content = custom_readme",
+                "",
+                "readme_path = pathlib.Path(output_dir) / 'README.md'",
+                "readme_path.write_text(readme_content, encoding='utf-8')",
+                "print(f'Custom README written to {readme_path}')",
                 "",
                 "print('Uploading to Hugging Face Hub...')",
                 "api = HfApi(token=os.environ.get('HF_TOKEN') or os.environ.get('HUGGINGFACE_HUB_TOKEN'))",
@@ -1852,11 +1940,17 @@ def main() -> int:
         if args.merge_model and args.sft and not args.shard_model:
             reporter.send("merge_start", "Merging LoRA adapter into base model...")
             merge_output_dir = f"{remote_dir}/merged"
+
+            # Generate custom README
+            custom_readme = build_custom_readme(args.repo_id, hub_model_id, args)
+            reporter.send("custom_readme", "Generated custom README for uploaded model")
+
             merge_script = build_merge_script(
                 merge_output_dir,
                 hub_model_id,
                 args.repo_id,
                 args.debug_remote,
+                custom_readme,
             )
             remote_merge_path = f"{remote_dir}/merge.sh"
             upload_text(ssh_client, remote_merge_path, merge_script)
