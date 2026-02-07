@@ -344,6 +344,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-seed", type=int, default=42, help="Seed for dataset subsampling.")
     parser.add_argument("--sft", action="store_true", help="Use Open R1 SFT training instead of GRPO.")
     parser.add_argument(
+        "--shard-model",
+        action="store_true",
+        help="Shard a single model across GPUs with ZeRO-3 (disables QLoRA).",
+    )
+    parser.add_argument(
         "--attn-implementation",
         default="sdpa",
         choices=["flash_attention_2", "sdpa", "eager"],
@@ -388,6 +393,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ssh-timeout-min", type=int, default=20)
     parser.add_argument("--env-file", default=None, help="Path to a .env file (defaults to .env).")
     parser.add_argument("--debug-remote", action="store_true", help="Enable verbose remote shell output.")
+    parser.add_argument(
+        "--transformers-from-git",
+        action="store_true",
+        help="Install Transformers from git HEAD instead of pinned version (default: use model config version or 4.57.6).",
+    )
+    parser.add_argument(
+        "--transformers-version",
+        default=None,
+        help="Explicit Transformers version (e.g., 4.57.6). Overrides auto-detection from model config.",
+    )
     return parser.parse_args()
 
 
@@ -473,6 +488,21 @@ def compute_model_size_gb(model_info) -> float:
     if weight_bytes == 0:
         weight_bytes = total_bytes
     return weight_bytes / (1024 ** 3)
+
+
+def get_transformers_version(
+    repo_id: str,
+    token: str,
+) -> Optional[str]:
+    try:
+        config_path = hf_hub_download(repo_id, "config.json", token=token)
+        config_data = json.loads(Path(config_path).read_text(encoding="utf-8"))
+        transformers_version = config_data.get("transformers_version")
+        if transformers_version:
+            return str(transformers_version)
+    except Exception:
+        pass
+    return None
 
 
 def resolve_chat_template(
@@ -756,7 +786,10 @@ def build_sft_config(
         config["max_steps"] = args.max_steps
     if chat_template:
         config["chat_template"] = chat_template
-    apply_qlora_config(config)
+    if args.shard_model:
+        config["use_peft"] = False
+    else:
+        apply_qlora_config(config)
     apply_dataset_fraction(config, args)
     return config
 
@@ -861,7 +894,7 @@ def run_ssh_command(
         raise RuntimeError(f"Remote command failed with exit status {exit_status}")
 
 
-def build_setup_script(debug: bool, install_flash_attn: bool) -> str:
+def build_setup_script(debug: bool, install_flash_attn: bool, transformers_version: Optional[str] = None) -> str:
     debug_line = "set -x" if debug else ""
     flash_attn_lines = []
     if install_flash_attn:
@@ -873,6 +906,28 @@ def build_setup_script(debug: bool, install_flash_attn: bool) -> str:
             "python -m pip uninstall -y flash-attn || true",
             "echo 'Skipping flash-attn install (using sdpa/eager).'",
         ]
+
+    transformers_install_lines = []
+    if transformers_version and transformers_version != "git":
+        transformers_install_lines = [
+            f"python -m pip install transformers=={transformers_version}",
+            "python - <<'PY'",
+            "import transformers",
+            "version = getattr(transformers, '__version__', 'unknown')",
+            "print(f'Transformers version: {version}')",
+            "PY",
+        ]
+    else:
+        transformers_install_lines = [
+            "python -m pip install git+https://github.com/huggingface/transformers.git",
+            "python - <<'PY'",
+            "import transformers",
+            "version = getattr(transformers, '__version__', 'unknown')",
+            "commit = getattr(transformers, '__git_version__', '')",
+            "print(f'Transformers version: {version} {commit}')",
+            "PY",
+        ]
+
     return "\n".join(
         [
             "#!/usr/bin/env bash",
@@ -969,13 +1024,7 @@ def build_setup_script(debug: bool, install_flash_attn: bool) -> str:
             "print('QLoRA deps OK')",
             "PY",
             "python -m pip uninstall -y transformers",
-            "python -m pip install git+https://github.com/huggingface/transformers.git",
-            "python - <<'PY'",
-            "import transformers",
-            "version = getattr(transformers, '__version__', 'unknown')",
-            "commit = getattr(transformers, '__git_version__', '')",
-            "print(f'Transformers version: {version} {commit}')",
-            "PY",
+            *transformers_install_lines,
             "",
         ]
     ).strip() + "\n"
@@ -1311,12 +1360,19 @@ def main() -> int:
         hf_api = HfApi()
         model_info = ensure_model_not_gated(hf_api, args.repo_id, hf_token)
         model_size_gb = compute_model_size_gb(model_info)
-        required_vram_gb = math.ceil(model_size_gb)
-
-        reporter.send(
-            "model_checked",
-            f"Model size {model_size_gb:.2f} GB, required VRAM {required_vram_gb} GB.",
-        )
+        if args.shard_model:
+            per_gpu = model_size_gb / max(1, args.gpu_count)
+            required_vram_gb = math.ceil(per_gpu * 1.2)
+            reporter.send(
+                "model_checked",
+                f"Model size {model_size_gb:.2f} GB, target per-GPU VRAM {required_vram_gb} GB (sharded).",
+            )
+        else:
+            required_vram_gb = math.ceil(model_size_gb)
+            reporter.send(
+                "model_checked",
+                f"Model size {model_size_gb:.2f} GB, required VRAM {required_vram_gb} GB.",
+            )
 
         client = RunpodGraphQLClient(runpod_api_key)
         gpu_types = client.get_gpu_types()
@@ -1413,7 +1469,19 @@ def main() -> int:
             )
         config_text = yaml.safe_dump(config, sort_keys=False)
         deepspeed_stage = args.deepspeed_stage
-        if args.sft and deepspeed_stage == 3:
+        if args.shard_model:
+            if deepspeed_stage != 3:
+                reporter.send(
+                    "deepspeed_adjusted",
+                    "Model sharding enabled; forcing ZeRO-3.",
+                )
+            deepspeed_stage = 3
+            if args.sft:
+                reporter.send(
+                    "shard_model",
+                    "Sharded SFT enabled; disabling QLoRA.",
+                )
+        elif args.sft and deepspeed_stage == 3:
             deepspeed_stage = 2
             reporter.send(
                 "deepspeed_adjusted",
@@ -1436,7 +1504,24 @@ def main() -> int:
         if not args.skip_setup:
             reporter.send("setup_start", "Installing Open R1 on the Pod.")
             install_flash_attn = args.attn_implementation == "flash_attention_2"
-            setup_script = build_setup_script(args.debug_remote, install_flash_attn)
+
+            transformers_version = None
+            if args.transformers_from_git:
+                transformers_version = "git"
+                reporter.send("transformers_version", "Installing Transformers from git HEAD.")
+            elif args.transformers_version:
+                transformers_version = args.transformers_version
+                reporter.send("transformers_version", f"Installing Transformers version: {transformers_version}")
+            else:
+                detected_version = get_transformers_version(args.repo_id, hf_token)
+                if detected_version:
+                    transformers_version = detected_version
+                    reporter.send("transformers_version", f"Auto-detected Transformers version from model config: {transformers_version}")
+                else:
+                    transformers_version = "4.57.6"
+                    reporter.send("transformers_version", f"Using default Transformers version: {transformers_version}")
+
+            setup_script = build_setup_script(args.debug_remote, install_flash_attn, transformers_version)
             remote_setup_path = f"{remote_dir}/setup.sh"
             upload_text(ssh_client, remote_setup_path, setup_script)
             run_ssh_command(ssh_client, f"bash -lc \"chmod +x {remote_setup_path}\"", reporter, "setup")

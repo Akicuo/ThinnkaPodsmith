@@ -105,6 +105,8 @@ SFT runs use QLoRA (4-bit + LoRA) rather than full fine-tuning.
 Because QLoRA uses a device map, the runner forces ZeRO-2 when `--sft` is set (ZeRO-3 is incompatible).
 The setup step installs `peft` and `bitsandbytes` and verifies they import successfully.
 The setup step replaces `transformers` with the latest git version for newer model architectures.
+For very large models, pass `--shard-model` to disable QLoRA and shard a single model across GPUs with ZeRO-3.
+When sharding, GPU selection uses a per-GPU VRAM estimate based on model size and GPU count.
 
 ## Speed controls
 Limit total training steps:
@@ -136,15 +138,30 @@ You can override it with:
 ## Failure cleanup
 If the run fails after a Pod is created, the script automatically stops and attempts to terminate the Pod to avoid extra charges.
 
-## Custom image (Open R1 preinstalled)
-This repo includes a Dockerfile that builds `reeeon/thinnka:latest`.
+## Custom image (SFT-only)
+This repo includes a Dockerfile that builds an SFT-focused image (no vLLM or flash-attn).
+It installs `peft`, `bitsandbytes`, and the latest Transformers from git.
 
 Build and push:
 - `docker build -t reeeon/thinnka:latest .`
 - `docker push reeeon/thinnka:latest`
 
+Runpod tutorial:
+1. Build/push the image (above).
+2. Run with the custom image and skip setup:
+   - `python thinnka_runner.py --image reeeon/thinnka:latest --skip-setup --sft ...`
+3. For very large models, add `--shard-model` to shard across GPUs.
+
+Local Docker tutorial:
+1. Build the image:
+   - `docker build -t thinnka-sft .`
+2. Start a container with GPUs:
+   - `docker run --gpus all -it --rm -e HF_TOKEN=your_token thinnka-sft bash`
+3. Run SFT inside the container:
+   - `cd /opt/open-r1`
+   - `accelerate launch --config_file recipes/accelerate_configs/zero3.yaml src/open_r1/sft.py --config recipes/OpenR1-Distill-7B/sft/config_distill.yaml`
+
 Notes:
-- Building can take time because Open R1 installs vLLM and flash-attn.
 - Open R1 recommends CUDA 12.4 and PyTorch 2.6.0; the base image here is CUDA 12.8.1.
 - If you build on macOS, use `--platform linux/amd64`.
 
@@ -167,6 +184,50 @@ Use `--reasoning-tag`, `--reasoning-end-tag`, `--answer-tag`, and `--answer-end-
 
 Enable answer tags:
 - `--answer-tag "<answer>" --answer-end-tag "</answer>"`
+
+## Transformers Version Control
+
+The runner automatically manages Transformers version to avoid MoE weight-conversion bugs (e.g., Qwen3-Next issues in v5.0 dev).
+
+**Default behavior:**
+- Detects `transformers_version` from model config.json
+- Falls back to `4.57.6` if not specified
+- Avoids git HEAD dev versions that break MoE models
+
+**Override options:**
+
+Force git HEAD (for testing latest changes):
+- `--transformers-from-git`
+
+Explicitly specify a version:
+- `--transformers-version 4.57.6`
+
+This approach prevents ZeRO-3 MoE conversion errors while allowing you to opt into dev versions when needed.
+
+## Changes
+
+### February 7, 2026
+- Added automatic Transformers version detection from model config
+- Default pinned to Transformers 4.57.6 to avoid MoE weight-conversion bugs
+- Added `--transformers-from-git` flag to force git HEAD installation
+- Added `--transformers-version` flag for explicit version override
+- Fixes compatibility issues with Qwen3-Next and other MoE models
+
+## Uploaded Models or Safetensors
+
+**Note: This section contains mockup data for demonstration purposes only.**
+
+| Model | Hub ID | Type | Transformers Version | Status |
+|-------|---------|------|---------------------|--------|
+| Qwen3-Next-7B | `username/qwen3-next-7b-grpo` | GRPO | 4.57.6 | Mockup |
+| Qwen3-Next-7B | `username/qwen3-next-7b-sft` | SFT | 4.57.6 | Mockup |
+| Gemma-2B | `username/gemma-2b-finetuned` | SFT | 4.57.6 | Mockup |
+
+**Example usage with these models:**
+```bash
+python thinnka_runner.py --repo-id username/qwen3-next-7b-grpo --gpu-count 1
+python thinnka_runner.py --repo-id username/qwen3-next-7b-sft --gpu-count 1 --sft
+```
 
 ## References
 - Runpod docs: https://docs.runpod.io/overview
