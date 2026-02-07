@@ -1,236 +1,336 @@
-# Thinnka Podsmith
+<div align="center">
 
-Provision Runpod Pods for GRPO or SFT fine-tuning with the Open R1 repo. This project:
-- checks if a Hugging Face model is gated
-- estimates model size to pick a GPU with enough VRAM
-- prefers L40S, then A100 SXM, then H100 SXM
-- creates a Runpod Pod with a target Docker image
-- SSHes into the Pod to run Open R1 GRPO or SFT training
-- pushes the result to the Hugging Face Hub using your `HF_TOKEN`
-- streams training progress to an async webhook and prints remote output locally
+# 🚀 Thinnka Podsmith
 
-## Prereqs
-- Windows (or WSL) with Python 3.11
-- Runpod API key
-- Hugging Face token with write access
-- SSH key pair added to Runpod account settings
-- Pod image that allows SSH on port 22
+**Automate Runpod Pod provisioning & train Open R1 models with zero friction**
 
-## Setup (Windows)
-1. Create and activate a virtual environment.
-2. Install dependencies:
-   - `pip install -r requirements.txt`
-3. Copy `example.env` to `.env` and fill in values.
+[![Python 3.11](https://img.shields.io/badge/python-3.11-blue?style=for-the-badge&logo=python)](https://www.python.org/downloads/release/python-3110/)
+[![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)](LICENSE)
 
-## Environment variables
-- `RUNPOD_API_KEY` (required)
-- `HF_TOKEN` or `HUGGINGFACE_HUB_TOKEN` (required)
-- `PROGRESS_WEBHOOK_URL` (optional, async progress events)
-- `DISCORD_WEBHOOK_URL` (optional, Discord progress logs)
-- `SSH_PUBLIC_KEY` or `RUNPOD_SSH_PUBLIC_KEY` (recommended)
-- `SSH_PRIVATE_KEY_PATH` (optional, defaults to `~/.ssh/id_ed25519`)
-- `WANDB_API_KEY` (optional if you pass `--report-to wandb`)
+</div>
 
-## .env loading
-The runner loads `.env` automatically from the project directory.
-You can override the path with `--env-file`.
-`.env` values take precedence over user/system environment variables.
+---
 
-## Hugging Face token
-Uploading to the Hub requires a **write** token. Read-only tokens will fail with 401.
-The runner uploads the token to the pod and writes it to `$HF_HOME/token` so
-training can authenticate reliably.
+## ✨ What it does
 
-## SSH note
-The script waits for a public IP and a mapped port for `22/tcp`.
-If you use a custom image, ensure `sshd` is running and port 22 is exposed.
+| Feature | Description |
+|----------|-------------|
+| 🔐 **Gated check** | Detects and blocks gated Hugging Face models upfront |
+| 📊 **Smart VRAM** | Estimates model size → auto-selects optimal GPU |
+| 🎯 **GPU priority** | Prefers L40S → A100 SXM → H100 SXM |
+| 🐳 **Pod provisioning** | Creates Runpod pods with your Docker image |
+| 🧠 **Training modes** | Supports both GRPO and SFT fine-tuning |
+| 📤 **Auto upload** | Pushes trained models to Hugging Face Hub |
+| 📡 **Progress streaming** | Real-time webhooks + Discord integration |
 
-## Progress webhook
-Set `PROGRESS_WEBHOOK_URL` to receive JSON updates. Payload includes:
-- `event`
-- `message`
-- `timestamp`
-- `stage` (setup or train when streaming logs)
-- `project`
-- `repo_id`
+---
 
-## Discord webhook
-Set `DISCORD_WEBHOOK_URL` or pass `--discord-webhook-url` to send the same events to Discord.
-Each event is sent as a text message (errors include recent output).
+## 📦 Quick Start
 
-## Logging
-Remote stdout/stderr lines are printed to the local console with a `[setup]` or `[train]` prefix. Webhook and Discord logs remain throttled to avoid spam.
+```bash
+# Install
+pip install -r requirements.txt
 
-## Quick start
-Runs the test case model and creates a Pod with the default image (GRPO, no answer tags):
-- `python thinnka_runner.py --repo-id unsloth/gemma-2b --gpu-count 1`
+# Configure
+cp example.env .env
+# Edit .env with your API keys
 
-Run supervised fine-tuning (SFT):
-- `python thinnka_runner.py --repo-id unsloth/gemma-2b --gpu-count 1 --sft`
+# Run GRPO training
+python thinnka_runner.py --repo-id unsloth/gemma-2b --gpu-count 1
 
-Force a specific GPU by id or name substring (fails if not eligible):
-- `python thinnka_runner.py --repo-id unsloth/gemma-2b --gpu-count 1 --gpu-type "L40S"`
+# Run SFT training
+python thinnka_runner.py --repo-id unsloth/gemma-2b --gpu-count 1 --sft
+```
 
-Use the custom image if you build and push it (see below):
-- `python thinnka_runner.py --repo-id unsloth/gemma-2b --gpu-count 1 --image reeeon/thinnka:latest`
-- Add `--skip-setup` when using the custom image to avoid reinstalling Open R1.
+---
 
-Enable Weights and Biases logging:
-- `python thinnka_runner.py --repo-id unsloth/gemma-2b --gpu-count 1 --report-to wandb`
+## 🛠️ Prerequisites
 
-Debug remote shell commands:
-- `python thinnka_runner.py --repo-id unsloth/gemma-2b --gpu-count 1 --debug-remote`
+| Requirement | Details |
+|-------------|---------|
+| **OS** | Windows (or WSL) with Python 3.11 |
+| **Runpod** | API key from Runpod console |
+| **Hugging Face** | Token with **write** access (read-only fails) |
+| **SSH keys** | Key pair added to Runpod settings |
+| **Docker** | Image exposing port 22 for SSH |
 
-## Attention implementation
-By default the runner uses `sdpa` to avoid FlashAttention ABI issues on some images.
-If you want FlashAttention, pass:
-- `--attn-implementation flash_attention_2`
+---
 
-When `flash_attention_2` is selected, the setup script installs `flash-attn`.
+## ⚙️ Configuration
 
-## Accelerate config
-The runner generates an Accelerate config that matches your `--gpu-count`.
-You can switch ZeRO stage with:
-- `--deepspeed-stage 2` or `--deepspeed-stage 3`
+### Environment Variables
 
-## Storage
-The persistent volume defaults to 300 GB. Override it with:
-- `--volume-gb 500`
+Create `.env` from `example.env`:
 
-## SFT mode
-Pass `--sft` to run Open R1's supervised fine-tuning script (`src/open_r1/sft.py`).
-The runner sets `max_seq_length` to `max_prompt_length + max_completion_length` so the existing CLI flags still apply.
-GRPO-only options (reward functions, `--num-generations`, and vLLM) are ignored in SFT mode.
-SFT runs use QLoRA (4-bit + LoRA) rather than full fine-tuning.
-Because QLoRA uses a device map, the runner forces ZeRO-2 when `--sft` is set (ZeRO-3 is incompatible).
-The setup step installs `peft` and `bitsandbytes` and verifies they import successfully.
-The setup step replaces `transformers` with the latest git version for newer model architectures.
-For very large models, pass `--shard-model` to disable QLoRA and shard a single model across GPUs with ZeRO-3.
-When sharding, GPU selection uses a per-GPU VRAM estimate based on model size and GPU count.
+```bash
+RUNPOD_API_KEY=your_runpod_key              # Required
+HF_TOKEN=your_hf_token                    # Required (write access)
+PROGRESS_WEBHOOK_URL=https://...            # Optional
+DISCORD_WEBHOOK_URL=https://discord.com/...  # Optional
+SSH_PUBLIC_KEY=ssh-ed25519 AAAA...         # Recommended
+SSH_PRIVATE_KEY_PATH=~/.ssh/id_ed25519      # Optional
+WANDB_API_KEY=your_wandb_key             # Optional
+```
 
-## Speed controls
-Limit total training steps:
-- `--max-steps 500`
+> **Note:** `.env` values override system environment variables.
 
-Subsample the dataset with a fixed seed:
-- `--dataset-fraction 0.1 --dataset-seed 123`
+### Key Behaviors
 
-The runner auto-computes max prompt/completion lengths from the dataset on the pod to avoid truncation and over-allocation.
-If the dataset has `messages`, it splits the last assistant message as the completion; otherwise it adjusts prompt/sequence length only.
+| Aspect | Behavior |
+|---------|----------|
+| **HF Token** | Uploaded to pod at `$HF_HOME/token` for reliable auth |
+| **SSH** | Waits for public IP + port 22 mapping |
+| **Webhook** | JSON payload with `event`, `message`, `timestamp`, `stage`, `project`, `repo_id` |
+| **Discord** | Same events as text messages (errors include recent output) |
+| **Logging** | Remote output streamed locally with `[setup]`/`[train]` prefix |
 
-## GRPO generation backend (GRPO only)
-GRPO is an online method: it must generate completions during training to compute rewards.
-By default the runner uses vLLM for faster generation. If you hit vLLM/NCCL issues,
-you can switch to the transformers generation path:
-- `--no-vllm` (slower, but avoids vLLM-specific hangs)
+---
 
-## GRPO generations (GRPO only)
-`num_generations` must divide the effective batch size. The runner auto-adjusts
-if needed. Override with:
-- `--num-generations 4`
+## 🎯 Common Use Cases
 
-## Chat templates
-Some base models (like `unsloth/gemma-2b`) do not ship a chat template.
-The runner detects this and injects a simple fallback template.
-You can override it with:
-- `--chat-template path\to\template.jinja`
+### Force specific GPU
 
-## Failure cleanup
-If the run fails after a Pod is created, the script automatically stops and attempts to terminate the Pod to avoid extra charges.
+```bash
+python thinnka_runner.py --repo-id unsloth/gemma-2b --gpu-count 1 --gpu-type "L40S"
+```
 
-## Custom image (SFT-only)
-This repo includes a Dockerfile that builds an SFT-focused image (no vLLM or flash-attn).
-It installs `peft`, `bitsandbytes`, and the latest Transformers from git.
+### Use custom Docker image
 
-Build and push:
-- `docker build -t reeeon/thinnka:latest .`
-- `docker push reeeon/thinnka:latest`
+```bash
+# Build & push
+docker build -t reeeon/thinnka:latest .
+docker push reeeon/thinnka:latest
 
-Runpod tutorial:
-1. Build/push the image (above).
-2. Run with the custom image and skip setup:
-   - `python thinnka_runner.py --image reeeon/thinnka:latest --skip-setup --sft ...`
-3. For very large models, add `--shard-model` to shard across GPUs.
+# Run with custom image
+python thinnka_runner.py --repo-id unsloth/gemma-2b --gpu-count 1 \
+  --image reeeon/thinnka:latest --skip-setup
+```
 
-Local Docker tutorial:
-1. Build the image:
-   - `docker build -t thinnka-sft .`
-2. Start a container with GPUs:
-   - `docker run --gpus all -it --rm -e HF_TOKEN=your_token thinnka-sft bash`
-3. Run SFT inside the container:
-   - `cd /opt/open-r1`
-   - `accelerate launch --config_file recipes/accelerate_configs/zero3.yaml src/open_r1/sft.py --config recipes/OpenR1-Distill-7B/sft/config_distill.yaml`
+### Enable W&B logging
 
-Notes:
-- Open R1 recommends CUDA 12.4 and PyTorch 2.6.0; the base image here is CUDA 12.8.1.
-- If you build on macOS, use `--platform linux/amd64`.
+```bash
+python thinnka_runner.py --repo-id unsloth/gemma-2b --gpu-count 1 --report-to wandb
+```
 
-## How it works
-1. Fetches `model_info` from the Hub and stops if the model is gated.
-2. Sums model file sizes to estimate required VRAM.
-3. Queries Runpod GPU types and picks from: L40S, A100 SXM, H100 SXM.
-4. Creates a Pod with your selected GPU count (1, 2, 4, 6, 8).
-5. Waits for SSH on port 22, then installs Open R1 if needed.
-6. Generates a GRPO or SFT config and launches training.
-7. Uses `HF_TOKEN` to push to the Hub.
-8. Streams progress lines to `PROGRESS_WEBHOOK_URL` and optionally `DISCORD_WEBHOOK_URL`.
+### Debug remote commands
 
-## Reasoning tag behavior (GRPO only)
-By default, the config uses `<think> ... </think>` and **no answer tags** (accuracy reward only).
-If you enable answer tags, the script uses Open R1's default format rewards.
-If you change the reasoning or answer tags, the script falls back to safer rewards
-because Open R1 format rewards are hardcoded to the default tags.
-Use `--reasoning-tag`, `--reasoning-end-tag`, `--answer-tag`, and `--answer-end-tag` to customize.
+```bash
+python thinnka_runner.py --repo-id unsloth/gemma-2b --gpu-count 1 --debug-remote
+```
 
-Enable answer tags:
-- `--answer-tag "<answer>" --answer-end-tag "</answer>"`
+---
 
-## Transformers Version Control
+## 🧠 Training Modes
 
-The runner automatically manages Transformers version to avoid MoE weight-conversion bugs (e.g., Qwen3-Next issues in v5.0 dev).
+### GRPO (Default)
 
-**Default behavior:**
-- Detects `transformers_version` from model config.json
-- Falls back to `4.57.6` if not specified
-- Avoids git HEAD dev versions that break MoE models
+- **Online RL** with vLLM generation (faster)
+- Reward functions: accuracy, format, tag_count (default tags)
+- Fallback to transformers: `--no-vllm`
 
-**Override options:**
+### SFT (Supervised Fine-Tuning)
 
-Force git HEAD (for testing latest changes):
-- `--transformers-from-git`
+```bash
+python thinnka_runner.py --repo-id unsloth/gemma-2b --gpu-count 1 --sft
+```
 
-Explicitly specify a version:
-- `--transformers-version 4.57.6`
+| Feature | GRPO | SFT |
+|---------|-------|-----|
+| **Method** | Online RL | Supervised |
+| **Efficiency** | QLoRA (4-bit + LoRA) | QLoRA (4-bit + LoRA) |
+| **ZeRO** | Stage 3 | Stage 2 (QLoRA incompatible with ZeRO-3) |
+| **vLLM** | Yes | No |
+| **Large models** | Use `--shard-model` | Use `--shard-model` to disable QLoRA |
 
-This approach prevents ZeRO-3 MoE conversion errors while allowing you to opt into dev versions when needed.
+> **📌 Sharded models:** Pass `--shard-model` for large models to disable QLoRA and use ZeRO-3 sharding instead.
 
-## Changes
+---
+
+## 🎛️ Advanced Options
+
+### Attention Implementation
+
+| Option | Use Case |
+|---------|----------|
+| `sdpa` (default) | Avoids FlashAttention ABI issues |
+| `flash_attention_2` | Faster, requires install |
+
+```bash
+--attn-implementation flash_attention_2
+```
+
+### ZeRO Stage
+
+```bash
+--deepspeed-stage 2  # or 3
+```
+
+### Storage
+
+```bash
+--volume-gb 500           # Persistent volume
+--container-disk-gb 200   # Container disk
+```
+
+### Speed Controls
+
+```bash
+--max-steps 500                     # Limit training steps
+--dataset-fraction 0.1              # Subsample dataset
+--dataset-seed 123                   # Fixed seed for reproducibility
+```
+
+### Chat Templates
+
+Auto-detects and injects missing templates (e.g., `unsloth/gemma-2b`):
+
+```bash
+--chat-template path/to/template.jinja
+```
+
+### Reasoning Tags (GRPO)
+
+Default: `</think>` tags only (accuracy reward)
+
+```bash
+# Enable answer tags
+--answer-tag "<answer>" --answer-end-tag "</answer>"
+
+# Custom tags
+--reasoning-tag "<think>" --reasoning-end-tag "</think>"
+```
+
+---
+
+## 🔧 Transformers Version Control
+
+**Prevents MoE weight-conversion bugs** (e.g., Qwen3-Next in Transformers v5.0 dev)
+
+### Automatic Detection
+
+| Priority | Source |
+|----------|---------|
+| 1️⃣ | `--transformers-version` flag |
+| 2️⃣ | Model's `config.json` → `transformers_version` field |
+| 3️⃣ | Default: `4.57.6` |
+
+### Override Options
+
+```bash
+# Force git HEAD (dev version)
+--transformers-from-git
+
+# Explicit version
+--transformers-version 4.57.6
+```
+
+> **✅ Result:** Auto-pins to stable versions, prevents ZeRO-3 MoE errors while allowing opt-in to dev for testing.
+
+---
+
+## 📊 Pipeline Flow
+
+```mermaid
+graph LR
+    A[Check Gated] --> B[Estimate VRAM]
+    B --> C[Select GPU]
+    C --> D[Create Pod]
+    D --> E[SSH Connect]
+    E --> F[Install Open R1]
+    F --> G[Generate Config]
+    G --> H[Launch Training]
+    H --> I[Push to Hub]
+    I --> J[Stream Progress]
+```
+
+1. 📥 Fetches `model_info` from Hub → stops if gated
+2. 📐 Sums model file sizes → estimates VRAM
+3. 🔍 Queries Runpod GPU types → picks L40S/A100/H100
+4. 🚀 Creates Pod (1/2/4/6/8 GPUs)
+5. 🔌 Waits for SSH port 22
+6. 📦 Installs Open R1 (if needed)
+7. ⚙️ Generates GRPO/SFT config
+8. ▶️ Launches training
+9. 📤 Pushes to Hub via `HF_TOKEN`
+10. 📡 Streams to webhook + Discord
+
+---
+
+## 🏗️ Custom Docker Image
+
+### SFT-Focused Build
+
+Excludes vLLM/flash-attn, includes QLoRA deps:
+
+```bash
+# Build
+docker build -t thinnka-sft .
+
+# Run locally
+docker run --gpus all -it --rm -e HF_TOKEN=your_token thinnka-sft bash
+
+# Inside container
+cd /opt/open-r1
+accelerate launch --config_file recipes/accelerate_configs/zero3.yaml \
+  src/open_r1/sft.py --config recipes/OpenR1-Distill-7B/sft/config_distill.yaml
+```
+
+### Notes
+
+| Aspect | Detail |
+|--------|--------|
+| **Base image** | `runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404` |
+| **CUDA** | 12.8.1 (Open R1 recommends 12.4) |
+| **PyTorch** | 2.6.0 |
+| **macOS build** | Use `--platform linux/amd64` |
+
+---
+
+## 📋 Changes
 
 ### February 7, 2026
-- Added automatic Transformers version detection from model config
-- Default pinned to Transformers 4.57.6 to avoid MoE weight-conversion bugs
-- Added `--transformers-from-git` flag to force git HEAD installation
-- Added `--transformers-version` flag for explicit version override
-- Fixes compatibility issues with Qwen3-Next and other MoE models
 
-## Uploaded Models or Safetensors
+| Change | Description |
+|--------|-------------|
+| ✨ | Auto-detect Transformers version from model config |
+| 🔒 | Default pinned to `4.57.6` (prevents MoE bugs) |
+| 🚩 | Added `--transformers-from-git` flag |
+| 🎯 | Added `--transformers-version` flag |
+| 🐛 | Fixed Qwen3-Next ZeRO-3 conversion errors |
 
-**Note: This section contains mockup data for demonstration purposes only.**
+---
 
-| Model | Hub ID | Type | Transformers Version | Status |
-|-------|---------|------|---------------------|--------|
-| Qwen3-Next-7B | `username/qwen3-next-7b-grpo` | GRPO | 4.57.6 | Mockup |
-| Qwen3-Next-7B | `username/qwen3-next-7b-sft` | SFT | 4.57.6 | Mockup |
-| Gemma-2B | `username/gemma-2b-finetuned` | SFT | 4.57.6 | Mockup |
+## 📦 Uploaded Models
 
-**Example usage with these models:**
+> **⚠️ Mockup data for demonstration only**
+
+| Model | Hub ID | Type | Transformers | Status |
+|--------|----------|------|--------------|----------|
+| Qwen3-Next-7B | `username/qwen3-next-7b-grpo` | GRPO | 4.57.6 | 🚧 Mockup |
+| Qwen3-Next-7B | `username/qwen3-next-7b-sft` | SFT | 4.57.6 | 🚧 Mockup |
+| Gemma-2B | `username/gemma-2b-finetuned` | SFT | 4.57.6 | 🚧 Mockup |
+
+**Usage:**
 ```bash
 python thinnka_runner.py --repo-id username/qwen3-next-7b-grpo --gpu-count 1
 python thinnka_runner.py --repo-id username/qwen3-next-7b-sft --gpu-count 1 --sft
 ```
 
-## References
-- Runpod docs: https://docs.runpod.io/overview
-- Runpod GraphQL Pods: https://docs.runpod.io/sdks/graphql/manage-pods
-- Hugging Face Hub Python: https://huggingface.co/docs/huggingface_hub/index
-- Open R1 repo: https://github.com/huggingface/open-r1
+---
+
+## 📚 References
+
+| Resource | Link |
+|----------|------|
+| **Runpod Docs** | https://docs.runpod.io/overview |
+| **Runpod GraphQL** | https://docs.runpod.io/sdks/graphql/manage-pods |
+| **Hugging Face Hub** | https://huggingface.co/docs/huggingface_hub |
+| **Open R1 Repo** | https://github.com/huggingface/open-r1 |
+
+---
+
+<div align="center">
+
+**Built with ❤️ for the ML community**
+
+</div>
