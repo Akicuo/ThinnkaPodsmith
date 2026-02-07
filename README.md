@@ -144,6 +144,24 @@ python thinnka_runner.py --repo-id unsloth/gemma-2b --gpu-count 1 --sft
 
 > **📌 Sharded models:** Pass `--shard-model` for large models to disable QLoRA and use ZeRO-3 sharding instead.
 
+### Model Merging (SFT + QLoRA Only)
+
+By default, SFT saves **LoRA adapters** (10-100MB). Use `--merge-model` to automatically merge into base model after training:
+
+```bash
+# Train and merge automatically
+python thinnka_runner.py --repo-id unsloth/gemma-2b --gpu-count 1 --sft --merge-model
+```
+
+| Feature | Without --merge-model | With --merge-model |
+|---------|---------------------|-------------------|
+| **Uploads** | LoRA adapters only | Merged full model |
+| **Size** | ~10-100 MB | ~Model size (GBs) |
+| **Usage** | Load with `PeftModel` | Load directly |
+| **Flexibility** | Apply to any base | Fixed to trained base |
+
+> **⚠️ Requirements:** Only works with SFT + QLoRA (default). Incompatible with `--shard-model` or GRPO mode.
+
 ---
 
 ## 🎛️ Advanced Options
@@ -296,6 +314,7 @@ accelerate launch --config_file recipes/accelerate_configs/zero3.yaml \
 | 🔒 | Default pinned to `4.57.6` (prevents MoE bugs) |
 | 🚩 | Added `--transformers-from-git` flag |
 | 🎯 | Added `--transformers-version` flag |
+| 🤝 | Added `--merge-model` flag for SFT + QLoRA |
 | 🐛 | Fixed Qwen3-Next ZeRO-3 conversion errors |
 
 ---
