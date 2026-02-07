@@ -104,6 +104,7 @@ GRPO-only options (reward functions, `--num-generations`, and vLLM) are ignored 
 SFT runs use QLoRA (4-bit + LoRA) rather than full fine-tuning.
 Because QLoRA uses a device map, the runner forces ZeRO-2 when `--sft` is set (ZeRO-3 is incompatible).
 The setup step installs `peft` and `bitsandbytes` and verifies they import successfully.
+The setup step replaces `transformers` with the latest git version for newer model architectures.
 
 ## Speed controls
 Limit total training steps:

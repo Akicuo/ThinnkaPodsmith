@@ -968,6 +968,14 @@ def build_setup_script(debug: bool, install_flash_attn: bool) -> str:
             "    raise SystemExit(f'QLoRA deps missing: {\", \".join(missing)}')",
             "print('QLoRA deps OK')",
             "PY",
+            "python -m pip uninstall -y transformers",
+            "python -m pip install git+https://github.com/huggingface/transformers.git",
+            "python - <<'PY'",
+            "import transformers",
+            "version = getattr(transformers, '__version__', 'unknown')",
+            "commit = getattr(transformers, '__git_version__', '')",
+            "print(f'Transformers version: {version} {commit}')",
+            "PY",
             "",
         ]
     ).strip() + "\n"
