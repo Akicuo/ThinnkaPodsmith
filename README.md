@@ -159,8 +159,23 @@ python thinnka_runner.py --repo-id unsloth/gemma-2b --gpu-count 1 --sft --merge-
 | **Size** | ~10-100 MB | ~Model size (GBs) |
 | **Usage** | Load with `PeftModel` | Load directly |
 | **Flexibility** | Apply to any base | Fixed to trained base |
+| **README** | Open R1 template | Custom model card |
 
 > **⚠️ Requirements:** Only works with SFT + QLoRA (default). Incompatible with `--shard-model` or GRPO mode.
+
+#### Custom Model Card
+
+When `--merge-model` is used, a custom README.md is automatically generated with:
+- **Base model link** - Direct link to the original model on Hugging Face
+- **Training arguments** - Complete list of all parameters used during training
+- **Reasoning message** - "This model was tuned to reason" statement
+- **Original README** - Full README from the base model (fetched automatically)
+
+The custom README includes all training configuration:
+- Training mode (SFT/GRPO), QLoRA settings, ZeRO stage
+- Dataset name, fraction, batch size, gradient accumulation
+- Learning rate, attention implementation, trust remote code
+- Custom dependencies (if any)
 
 ---
 
@@ -334,7 +349,9 @@ accelerate launch --config_file recipes/accelerate_configs/zero3.yaml \
 | 🤝 | Added `--merge-model` flag for SFT + QLoRA |
 | 📦 | Added `--custom-dependencies` flag for pip packages |
 | 🔐 | Added `--trust-remote-code` flag for custom model code |
+| 📝 | Added custom README generation for merged models |
 | 🐛 | Fixed Qwen3-Next ZeRO-3 conversion errors |
+| 🐛 | Fixed custom dependencies verification to use pip show |
 
 ---
 
