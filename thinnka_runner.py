@@ -349,6 +349,11 @@ def parse_args() -> argparse.Namespace:
         help="Shard a single model across GPUs with ZeRO-3 (disables QLoRA).",
     )
     parser.add_argument(
+        "--merge-model",
+        action="store_true",
+        help="Merge LoRA adapters into base model after training and upload merged model (SFT + QLoRA only).",
+    )
+    parser.add_argument(
         "--attn-implementation",
         default="sdpa",
         choices=["flash_attention_2", "sdpa", "eager"],
@@ -1316,6 +1321,106 @@ def build_train_script(
     ).strip() + "\n"
 
 
+def build_merge_script(
+    output_dir: str,
+    hub_model_id: str,
+    repo_id: str,
+    debug: bool,
+) -> str:
+    debug_line = "set -x" if debug else ""
+    return "\n".join(
+        [
+            "#!/usr/bin/env bash",
+            "set -euo pipefail",
+            debug_line,
+            "TOKEN_FILE=/workspace/thinnka/hf_token",
+            "set +x",
+            "TOKEN=\"\"",
+            "if [ -f \"$TOKEN_FILE\" ]; then TOKEN=$(cat \"$TOKEN_FILE\"); fi",
+            "if [ -z \"$TOKEN\" ]; then TOKEN=${HF_TOKEN:-${HUGGINGFACE_HUB_TOKEN:-}}; fi",
+            "if [ -z \"$TOKEN\" ]; then echo 'HF_TOKEN missing in pod environment.'; exit 1; fi",
+            "export HF_TOKEN=\"$TOKEN\"",
+            "export HUGGINGFACE_HUB_TOKEN=\"$TOKEN\"",
+            "export HF_HOME=\"${HF_HOME:-/workspace/.cache/huggingface}\"",
+            "mkdir -p \"$HF_HOME\"",
+            "python - <<'PY'",
+            "import os, pathlib, sys, shutil, json",
+            "token = os.getenv('HF_TOKEN') or os.getenv('HUGGINGFACE_HUB_TOKEN')",
+            "if not token:",
+            "    print('HF_TOKEN missing in pod environment.', file=sys.stderr)",
+            "    sys.exit(1)",
+            "hf_home = os.getenv('HF_HOME', '/workspace/.cache/huggingface')",
+            "path = pathlib.Path(hf_home)",
+            "path.mkdir(parents=True, exist_ok=True)",
+            "(path / 'token').write_text(token.strip())",
+            "PY",
+            "set -x",
+            "source /opt/openr1-venv/bin/activate",
+            "echo 'Loading base model and LoRA adapter...'",
+            "python - <<'PY'",
+            "import os",
+            "import torch",
+            "from transformers import AutoModelForCausalLM, AutoTokenizer",
+            "from peft import PeftModel",
+            "from huggingface_hub import HfApi",
+            "import shutil",
+            "",
+            "output_dir = os.environ.get('OUTPUT_DIR', '/workspace/models/temp-merged')",
+            "hub_model_id = os.environ.get('HUB_MODEL_ID')",
+            "repo_id = os.environ.get('REPO_ID')",
+            "",
+            "print(f'Output directory: {output_dir}')",
+            "print(f'Hub model ID: {hub_model_id}')",
+            "print(f'Base repo ID: {repo_id}')",
+            "",
+            "base_model_path = repo_id",
+            "adapter_path = output_dir",
+            "",
+            "print('Loading base model...')",
+            "base_model = AutoModelForCausalLM.from_pretrained(",
+            "    base_model_path,",
+            "    torch_dtype=torch.bfloat16,",
+            "    device_map='auto',",
+            ")",
+            "",
+            "print('Loading LoRA adapter...')",
+            "model = PeftModel.from_pretrained(base_model, adapter_path)",
+            "",
+            "print('Merging adapter into base model...')",
+            "merged_model = model.merge_and_unload()",
+            "",
+            "print('Saving merged model...')",
+            "merged_model.save_pretrained(",
+            "    output_dir,",
+            "    safe_serialization=True,",
+            ")",
+            "",
+            "print('Saving tokenizer...')",
+            "tokenizer = AutoTokenizer.from_pretrained(base_model_path)",
+            "tokenizer.save_pretrained(output_dir)",
+            "",
+            "print('Uploading to Hugging Face Hub...')",
+            "api = HfApi(token=os.environ.get('HF_TOKEN') or os.environ.get('HUGGINGFACE_HUB_TOKEN'))",
+            "",
+            "api.create_repo(",
+            "    repo_id=hub_model_id,",
+            "    exist_ok=True,",
+            "    private=False,",
+            ")",
+            "",
+            "api.upload_folder(",
+            "    repo_id=hub_model_id,",
+            "    folder_path=output_dir,",
+            "    repo_type='model',",
+            ")",
+            "",
+            "print(f'Merged model uploaded successfully to {hub_model_id}')",
+            "PY",
+            "",
+        ]
+    ).strip() + "\n"
+
+
 def main() -> int:
     args = parse_args()
     load_env_file(args.env_file)
@@ -1331,6 +1436,10 @@ def main() -> int:
         raise RuntimeError("GPU count must be one of 1, 2, 4, 6, 8.")
     if args.dataset_fraction <= 0 or args.dataset_fraction > 1:
         raise RuntimeError("--dataset-fraction must be between 0 and 1 (exclusive of 0).")
+    if args.merge_model and not args.sft:
+        raise RuntimeError("--merge-model is only supported with SFT mode (use --sft flag).")
+    if args.merge_model and args.shard_model:
+        raise RuntimeError("--merge-model is not supported with --shard-model (QLoRA disabled).")
 
     runpod_api_key = os.getenv("RUNPOD_API_KEY")
     if not runpod_api_key:
@@ -1544,6 +1653,37 @@ def main() -> int:
         run_ssh_command(ssh_client, f"bash -lc \"chmod +x {remote_train_path}\"", reporter, "train")
         run_ssh_command(ssh_client, f"bash -lc \"{remote_train_path}\"", reporter, "train")
         reporter.send("train_done", "Training finished.")
+
+        if args.merge_model and args.sft and not args.shard_model:
+            reporter.send("merge_start", "Merging LoRA adapter into base model...")
+            merge_output_dir = f"{remote_dir}/merged"
+            merge_script = build_merge_script(
+                merge_output_dir,
+                hub_model_id,
+                args.repo_id,
+                args.debug_remote,
+            )
+            remote_merge_path = f"{remote_dir}/merge.sh"
+            upload_text(ssh_client, remote_merge_path, merge_script)
+            run_ssh_command(ssh_client, f"bash -lc \"chmod +x {remote_merge_path}\"", reporter, "merge")
+            run_ssh_command(
+                ssh_client,
+                f"bash -lc \"OUTPUT_DIR={merge_output_dir} HUB_MODEL_ID={hub_model_id} REPO_ID={args.repo_id} {remote_merge_path}\"",
+                reporter,
+                "merge",
+            )
+            reporter.send("merge_done", f"Merged model uploaded to {hub_model_id}.")
+        elif args.merge_model and not args.sft:
+            reporter.send(
+                "merge_skip",
+                "Model merging is only supported for SFT + QLoRA mode. Skipping merge.",
+            )
+        elif args.merge_model and args.shard_model:
+            reporter.send(
+                "merge_skip",
+                "Model merging is not supported with --shard-model (full fine-tuning). Skipping merge.",
+            )
+
         reporter.send("done", "Run completed.")
         return 0
     except Exception as exc:
